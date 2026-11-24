@@ -1,0 +1,18 @@
+[package]
+name = "otzaria-joiner"
+version = "1.0.0"
+edition = "2021"
+description = "מרכיב הספרייה של אוצריא — הרכבת קבצי ספרייה מפוצלים לקובץ אחד"
+
+[build-dependencies]
+tauri-build = { version = "2", features = [] }
+
+[dependencies]
+tauri = { version = "2", features = [] }
+joiner-core = { path = "../core" }
+serde = { version = "1", features = ["derive"] }
+serde_json = "1"
+rfd = { version = "0.15", default-features = false, features = ["gtk3"] }
+
+[features]
+custom-protocol = ["tauri/custom-protocol"]

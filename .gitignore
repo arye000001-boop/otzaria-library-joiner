@@ -1,0 +1,5 @@
+target/
+app/gen/
+*.zst
+*.joining
+*.compressing

@@ -1,0 +1,109 @@
+<!doctype html>
+<html lang="he" dir="rtl">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>מרכיב הספרייה של אוצריא</title>
+<link rel="stylesheet" href="style.css">
+</head>
+<body>
+<div class="win">
+  <header class="titlebar" data-tauri-drag-region>
+    <span class="tb-title" data-tauri-drag-region>מרכיב הספרייה של אוצריא</span>
+    <span class="tb-btns">
+      <button id="btn-min" aria-label="מזער">–</button>
+      <button id="btn-close" aria-label="סגור">✕</button>
+    </span>
+  </header>
+
+  <main id="stage">
+    <!-- 1. פתיחה -->
+    <section class="screen" id="s-welcome">
+      <div class="center grow">
+        <svg class="logo" viewBox="0 0 120 120" aria-hidden="true">
+          <defs><linearGradient id="g" x1="0" y1="0" x2="1" y2="1"><stop offset="0" stop-color="#e6bd6e"/><stop offset="1" stop-color="#8a5a12"/></linearGradient></defs>
+          <path d="M60 28v62L20 80V18z" fill="url(#g)"/><path d="M60 28v62l40-10V18z" fill="url(#g)" opacity=".8"/>
+          <path d="M60 28v62" stroke="#5c3a06" stroke-width="3"/>
+          <g stroke="#5c3a06" stroke-width="3" stroke-linecap="round"><path d="M30 38l24 5M30 50l24 5M30 62l24 5M90 38l-24 5M90 50l-24 5M90 62l-24 5"/></g>
+          <path d="M14 96h92" stroke="#8a5a12" stroke-width="4" stroke-linecap="round"/>
+        </svg>
+        <h1>מרכיב הספרייה של אוצריא</h1>
+        <p class="sub">הרכבת קבצי ספרייה מפוצלים — בלבד</p>
+      </div>
+      <p class="note">הכלי מחבר את חלקי הספרייה (<span dir="ltr">part-000, part-001…</span>) לקובץ אחד ומאמת אותו מול המניפסט. הוא לא מתקין, לא מוריד, ולא כותב שום קובץ מחוץ לתיקייה שבה הוא רץ.</p>
+      <div class="actions col">
+        <button class="btn primary wide" id="go-join">בואו נתחיל</button>
+        <button class="btn link" id="go-compress">דחיסת קובץ לפורמט הספרייה (zstd)</button>
+      </div>
+    </section>
+
+    <!-- 2. בחירת קבוצה -->
+    <section class="screen" id="s-pick" hidden>
+      <div class="dots" data-step="1"></div>
+      <h2>איזה קובץ להרכיב?</h2>
+      <p class="hint" id="pick-hint"></p>
+      <div class="cards scroll" id="set-list"></div>
+      <button class="btn tonal wide" id="pick-folder">בחירת תיקייה אחרת…</button>
+      <div class="actions"><button class="btn primary" id="pick-next" disabled>המשך</button><button class="btn text" data-back="s-welcome">חזרה</button></div>
+    </section>
+
+    <!-- 2ב. בחירת קובץ לדחיסה -->
+    <section class="screen" id="s-cpick" hidden>
+      <div class="dots" data-step="1"></div>
+      <h2>איזה קובץ לדחוס?</h2>
+      <p class="hint">בחר קובץ (למשל <span dir="ltr">seforim.db</span>). הוא יידחס ל-<span dir="ltr">.zst</span> באותו אופן ובאותה רמה שבהם נבנית הספרייה.</p>
+      <div class="cards grow" id="cfile"></div>
+      <button class="btn tonal wide" id="cpick-file">בחירת קובץ…</button>
+      <div class="actions"><button class="btn primary" id="cpick-next" disabled>המשך</button><button class="btn text" data-back="s-welcome">חזרה</button></div>
+    </section>
+
+    <!-- 3. מוכנים -->
+    <section class="screen" id="s-ready" hidden>
+      <div class="dots" data-step="2"></div>
+      <h2 id="ready-title">מוכנים להתחיל</h2>
+      <p class="hint" id="ready-hint"></p>
+      <div class="cards grow" id="ready-cards"></div>
+      <div class="alert" id="ready-alert" hidden></div>
+      <label class="check" id="del-wrap" hidden><input type="checkbox" id="del-parts"><span>מחק את החלקים אחרי הרכבה מוצלחת ומאומתת</span></label>
+      <div class="actions"><button class="btn primary" id="start">התחל</button><button class="btn text" id="ready-back">חזרה</button></div>
+    </section>
+
+    <!-- 4. התקדמות -->
+    <section class="screen" id="s-progress" hidden>
+      <div class="dots" data-step="3"></div>
+      <div class="center grow">
+        <h2 id="prog-title">מרכיב את הספרייה…</h2>
+        <p class="hint" id="prog-sub"></p>
+        <div class="pct" id="pct">0%</div>
+        <div class="bar"><div id="bar-fill"></div></div>
+        <p class="meta" id="prog-meta"></p>
+        <p class="meta dim" id="prog-size"></p>
+      </div>
+      <div class="actions"><button class="btn tonal" id="stop">עצור</button></div>
+    </section>
+
+    <!-- 5. סיום -->
+    <section class="screen" id="s-done" hidden>
+      <div class="center">
+        <div class="badge ok"><svg viewBox="0 0 24 24"><path d="M5 12.5l4.5 4.5L19 7.5" fill="none" stroke="#fff" stroke-width="3" stroke-linecap="round" stroke-linejoin="round"/></svg></div>
+        <h2>הכל מוכן</h2>
+      </div>
+      <div class="cards grow scroll" id="done-cards"></div>
+      <button class="btn tonal wide" id="del-now" hidden>מחק את החלקים (נשמר רק הקובץ המורכב)</button>
+      <div class="actions col"><button class="btn primary wide" id="reveal">הצג בתיקייה</button><button class="btn text" id="finish">סיום</button></div>
+    </section>
+
+    <!-- 6. שגיאה -->
+    <section class="screen" id="s-error" hidden>
+      <div class="center grow">
+        <div class="badge bad" id="err-badge">!</div>
+        <h2 id="err-title">משהו השתבש</h2>
+        <p class="hint" id="err-msg"></p>
+      </div>
+      <div class="actions col"><button class="btn primary wide" id="retry">נסה שוב</button><button class="btn text" id="err-close">סגור</button></div>
+    </section>
+  </main>
+</div>
+<script src="app.js"></script>
+</body>
+</html>

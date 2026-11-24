@@ -1,0 +1,12 @@
+[package]
+name = "joiner-core"
+version = "1.0.0"
+edition = "2021"
+
+[dependencies]
+sha2 = "0.10"
+serde = { version = "1", features = ["derive"] }
+serde_json = "1"
+# libzstd מקובע ל-1.5.5 (zstd 0.13.0), הגרסה שבה נבנית הספרייה; הפלט משתנה בין גרסאות
+zstd = { version = "=0.13.0", features = ["zstdmt"] }
+fs2 = "0.4"
