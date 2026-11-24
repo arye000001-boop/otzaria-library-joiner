@@ -114,3 +114,32 @@ fn compress_roundtrip_and_frame_parameters() {
     assert_ne!(z[4] & 0x04, 0, "סכום ביקורת חייב להיות פעיל");
     assert_eq!(zstd::decode_all(&z[..]).unwrap(), text);
 }
+
+#[test]
+fn unknown_manifest_version_is_blocked_not_silently_unverified() {
+    let d = tmpdir("ver");
+    make_split(&d, "lib.db.zst", &data(1_500_000), 1_000_000);
+    let m = d.join("lib.db.zst.manifest.json");
+    let txt = fs::read_to_string(&m).unwrap().replace("\"schemaVersion\":1", "\"schemaVersion\":2");
+    fs::write(&m, txt).unwrap();
+    let sets = find_sets(&d).unwrap();
+    let e = precheck(&sets[0]).unwrap_err().to_string();
+    assert!(e.contains("2"), "{e}");
+    fs::write(&m, "not json").unwrap();
+    assert!(precheck(&find_sets(&d).unwrap()[0]).is_err());
+}
+
+#[test]
+fn many_parts_in_order_including_three_and_four() {
+    for n in [3usize, 4, 12] {
+        let d = tmpdir(&format!("n{n}"));
+        let orig = data(n * 300_000 - 17);
+        make_split(&d, "lib.db.zst", &orig, 300_000);
+        let sets = find_sets(&d).unwrap();
+        assert_eq!(sets[0].parts.len(), n);
+        let out = tmpdir(&format!("n{n}out"));
+        let r = join(&sets[0], &out, false, &AtomicBool::new(false), &mut |_| {}).unwrap();
+        assert!(r.verified);
+        assert_eq!(fs::read(&r.output).unwrap(), orig);
+    }
+}

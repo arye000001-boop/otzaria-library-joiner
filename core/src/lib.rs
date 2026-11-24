@@ -68,6 +68,8 @@ pub struct SplitSet {
     pub total: u64,
     pub manifest: Option<Manifest>,
     pub manifest_path: Option<PathBuf>,
+    /// קובץ מניפסט קיים אבל לא ניתן לקרוא או בגרסה שהכלי לא מכיר: לא מרכיבים "בלי אימות" בשקט
+    pub manifest_problem: Option<String>,
 }
 
 #[derive(Debug, Clone)]
@@ -122,14 +124,33 @@ pub fn find_sets(dir: &Path) -> Result<Vec<SplitSet>> {
     for (archive, map) in groups {
         let parts: Vec<PathBuf> = map.values().map(|v| v.0.clone()).collect();
         let part_sizes: Vec<u64> = map.values().map(|v| v.1).collect();
-        let manifest_path = dir.join(format!("{archive}.manifest.json"));
-        let (manifest, manifest_path) = match fs::read(&manifest_path) {
-            Ok(bytes) => match serde_json::from_slice::<Manifest>(&bytes) {
-                Ok(m) if m.schema_version == 1 && m.archive == archive => (Some(m), Some(manifest_path)),
-                _ => (None, None),
-            },
-            Err(_) => (None, None),
-        };
+        let manifest_file = dir.join(format!("{archive}.manifest.json"));
+        let (mut manifest, mut manifest_path, mut manifest_problem) = (None, None, None);
+        if let Ok(bytes) = fs::read(&manifest_file) {
+            // קודם בודקים את גרסת הסכמה בלבד, כדי שגרסה עתידית תקבל הודעה מדויקת
+            let ver = serde_json::from_slice::<serde_json::Value>(&bytes)
+                .ok()
+                .and_then(|v| v.get("schemaVersion").and_then(|x| x.as_u64()));
+            match ver {
+                None => manifest_problem = Some("קובץ המניפסט פגום או לא קריא".to_string()),
+                Some(1) => match serde_json::from_slice::<Manifest>(&bytes) {
+                    Ok(m) if m.archive == archive => {
+                        manifest = Some(m);
+                        manifest_path = Some(manifest_file);
+                    }
+                    Ok(m) => {
+                        manifest_problem =
+                            Some(format!("המניפסט שייך לקובץ אחר ({}) ולא ל-{archive}", m.archive))
+                    }
+                    Err(_) => manifest_problem = Some("קובץ המניפסט פגום או לא קריא".to_string()),
+                },
+                Some(v) => {
+                    manifest_problem = Some(format!(
+                        "גרסת המניפסט ({v}) חדשה מדי ואינה מוכרת לכלי. יש להוריד גרסה עדכנית שלו"
+                    ))
+                }
+            }
+        }
         sets.push(SplitSet {
             total: part_sizes.iter().sum(),
             archive,
@@ -137,6 +158,7 @@ pub fn find_sets(dir: &Path) -> Result<Vec<SplitSet>> {
             part_sizes,
             manifest,
             manifest_path,
+            manifest_problem,
         });
     }
     Ok(sets)
@@ -144,6 +166,9 @@ pub fn find_sets(dir: &Path) -> Result<Vec<SplitSet>> {
 
 /// בדיקות מקדימות מהירות: רצף חלקים, שמות וגדלים מול המניפסט.
 pub fn precheck(set: &SplitSet) -> Result<()> {
+    if let Some(p) = &set.manifest_problem {
+        return msg(p.clone());
+    }
     // רצף מספרי החלקים חייב להיות 000,001,...
     for (i, p) in set.parts.iter().enumerate() {
         let name = p.file_name().unwrap().to_string_lossy().to_string();
