@@ -11,8 +11,8 @@
   <header class="titlebar" data-tauri-drag-region>
     <span class="tb-title" data-tauri-drag-region><img src="logo.webp" alt="" data-tauri-drag-region>מרכיב הספרייה של אוצריא</span>
     <span class="tb-btns">
-      <button id="btn-close" aria-label="סגור"><i class="fi">&#xF368;</i></button>
       <button id="btn-min" aria-label="מזער"><i></i></button>
+      <button id="btn-close" aria-label="סגור"><i class="fi">&#xF368;</i></button>
     </span>
   </header>
 
@@ -33,7 +33,17 @@
         <div class="hdr"><h2>איזה קובץ להרכיב?</h2><p class="desc">הכלי זיהה את חלקי הספרייה שבתיקייה.</p><p class="hint" id="pick-hint"></p></div>
         <div class="body scroll" id="set-list"></div>
       </div>
-      <div class="footer"><button class="btn primary" id="pick-next" disabled>המשך</button><button class="btn ghost" data-back="s-welcome">חזרה</button></div>
+      <div class="footer"><button class="btn ghost" data-back="s-welcome">חזרה</button><button class="btn primary" id="pick-next" disabled>המשך</button></div>
+    </section>
+
+    <!-- מה לעשות -->
+    <section class="screen" id="s-action" hidden>
+      <div class="inner">
+        <div class="steps"><div class="dots"></div><div class="steplabel"></div></div>
+        <div class="hdr"><h2>מה לעשות עם החלקים?</h2><p class="desc">אפשר להרכיב לקובץ אחד, או לחלץ ישר לקובץ ה-DB.</p></div>
+        <div class="body scroll" id="action-list"></div>
+      </div>
+      <div class="footer"><button class="btn ghost" data-back="s-pick">חזרה</button><button class="btn primary" id="action-next">המשך</button></div>
     </section>
 
     <!-- בחירת קובץ לדחיסה -->
@@ -43,7 +53,7 @@
         <div class="hdr"><h2>איזה קובץ לדחוס?</h2><p class="desc">הקובץ יידחס ל-<span class="ltr">.zst</span> כמו בבניית הספרייה.</p></div>
         <div class="body" id="cfile"></div>
       </div>
-      <div class="footer"><button class="btn primary" id="cpick-next" disabled>המשך</button><button class="btn tonal" id="cpick-file">בחירת קובץ…</button><button class="btn ghost" data-back="s-welcome">חזרה</button></div>
+      <div class="footer"><button class="btn ghost" data-back="s-welcome">חזרה</button><button class="btn primary" id="cpick-next" disabled>המשך</button></div>
     </section>
 
     <!-- מוכנים -->
@@ -53,7 +63,7 @@
         <div class="hdr"><h2 id="ready-title">מוכנים להתחיל</h2><p class="desc" id="ready-hint"></p></div>
         <div class="body scroll" id="ready-cards"></div>
       </div>
-      <div class="footer"><button class="btn primary" id="start">התחל</button><button class="btn ghost" id="ready-back">חזרה</button></div>
+      <div class="footer"><button class="btn ghost" id="ready-back">חזרה</button><button class="btn primary" id="start">התחל</button></div>
     </section>
 
     <!-- התקדמות -->
@@ -75,7 +85,7 @@
       <div class="badge"><i class="fi fif">&#xF295;</i></div>
       <div class="fin-title">הכל מוכן</div>
       <div class="fin-body" id="done-cards"></div>
-      <div class="footer"><button class="btn primary" id="reveal">הצג בתיקייה</button><button class="btn ghost" id="finish">סיום</button></div>
+      <div class="footer stack"><button class="btn primary wide" id="reveal">הצג בתיקייה</button><button class="btn ghost wide" id="finish">סיום</button></div>
     </section>
 
     <!-- שגיאה -->
@@ -83,7 +93,7 @@
       <div class="badge bad" id="err-badge"><i class="fi">&#xF86A;</i></div>
       <div class="fin-title" id="err-title">משהו השתבש</div>
       <p class="err-body" id="err-msg"></p>
-      <div class="footer"><button class="btn primary" id="retry">נסה שוב</button><button class="btn ghost" id="err-close">סגור</button></div>
+      <div class="footer stack"><button class="btn primary wide" id="retry">נסה שוב</button><button class="btn ghost wide" id="err-close">סגור</button></div>
     </section>
   </main>
 </div>

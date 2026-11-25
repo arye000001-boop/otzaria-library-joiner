@@ -143,3 +143,75 @@ fn many_parts_in_order_including_three_and_four() {
         assert_eq!(fs::read(&r.output).unwrap(), orig);
     }
 }
+
+
+/// באותו מבנה כמו קבצי הספרייה: סכום ביקורת פעיל וגודל התוכן בכותרת
+fn zst(data: &[u8]) -> Vec<u8> {
+    use std::io::Write;
+    let mut e = zstd::stream::write::Encoder::new(Vec::new(), 3).unwrap();
+    e.include_checksum(true).unwrap();
+    e.set_pledged_src_size(Some(data.len() as u64)).unwrap();
+    e.write_all(data).unwrap();
+    e.finish().unwrap()
+}
+fn compressible(n: usize) -> Vec<u8> {
+    (0..n).map(|i| ((i / 7) % 251) as u8).collect()
+}
+
+#[test]
+fn extract_streams_parts_directly_to_db() {
+    let d = tmpdir("ex");
+    let db = compressible(6_000_000);
+    let z = zst(&db);
+    make_split(&d, "seforim-x.db.zst", &z, z.len() / 3 + 1);
+    let sets = find_sets(&d).unwrap();
+    assert!(sets[0].parts.len() >= 3);
+    let out = tmpdir("exout");
+    let r = extract(&sets[0], &out, false, &AtomicBool::new(false), &mut |_| {}).unwrap();
+    assert!(r.verified);
+    assert_eq!(r.output.file_name().unwrap(), "seforim-x.db");
+    assert_eq!(fs::read(&r.output).unwrap(), db);
+    assert!(!out.join("seforim-x.db.zst").exists(), "אסור ליצור קובץ zst ביניים");
+    assert!(!out.join("seforim-x.db.extracting").exists());
+}
+
+#[test]
+fn extract_rejects_corruption_and_cleans_up() {
+    let d = tmpdir("exbad");
+    let z = zst(&compressible(3_000_000));
+    make_split(&d, "a.db.zst", &z, z.len() / 2 + 1);
+    let p = d.join("a.db.zst.part-001");
+    let mut b = fs::read(&p).unwrap();
+    let l = b.len(); b[l / 2] ^= 0x55;
+    fs::write(&p, b).unwrap();
+    let sets = find_sets(&d).unwrap();
+    let out = tmpdir("exbadout");
+    assert!(extract(&sets[0], &out, false, &AtomicBool::new(false), &mut |_| {}).is_err());
+    assert_eq!(fs::read_dir(&out).unwrap().count(), 0);
+}
+
+#[test]
+fn extract_detects_zstd_checksum_failure_without_manifest() {
+    // בלי מניפסט, סכום הביקורת של zstd הוא קו ההגנה
+    let d = tmpdir("exck");
+    let z = zst(&compressible(2_000_000));
+    make_split(&d, "a.db.zst", &z, z.len() / 2 + 1);
+    fs::remove_file(d.join("a.db.zst.manifest.json")).unwrap();
+    let p = d.join("a.db.zst.part-000");
+    let mut b = fs::read(&p).unwrap(); let l = b.len(); b[l / 2] ^= 0x01; fs::write(&p, b).unwrap();
+    let sets = find_sets(&d).unwrap();
+    let out = tmpdir("exckout");
+    assert!(extract(&sets[0], &out, false, &AtomicBool::new(false), &mut |_| {}).is_err());
+    assert_eq!(fs::read_dir(&out).unwrap().count(), 0);
+}
+
+#[test]
+fn extract_content_size_and_name() {
+    let d = tmpdir("exsz");
+    let z = zst(&compressible(1_234_567));
+    make_split(&d, "q.db.zst", &z, z.len() / 2 + 1);
+    let sets = find_sets(&d).unwrap();
+    assert_eq!(content_size(&sets[0]), Some(1_234_567));
+    assert_eq!(extracted_name("seforim-schema7.db.zst").as_deref(), Some("seforim-schema7.db"));
+    assert_eq!(extracted_name("x.tar"), None);
+}

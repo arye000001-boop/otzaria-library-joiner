@@ -32,6 +32,11 @@ struct SetInfo {
     has_manifest: bool,
     problem: Option<String>,
     exists_in_out: bool,
+    /// גודל ה-DB אחרי חילוץ (מכותרת ה-zstd), אם ידוע
+    content_size: Option<u64>,
+    /// השם של הקובץ שייווצר בחילוץ ישיר, או null אם הארכיון אינו .zst
+    extract_name: Option<String>,
+    extract_exists: bool,
 }
 
 #[derive(Serialize)]
@@ -59,6 +64,9 @@ fn scan_path(dir: &Path, out_dir: &Path) -> Result<ScanResult, String> {
             has_manifest: s.manifest.is_some(),
             problem: core::precheck(s).err().map(|e| e.to_string()),
             exists_in_out: out_dir.join(&s.archive).exists(),
+            content_size: core::content_size(s),
+            extract_name: core::extracted_name(&s.archive),
+            extract_exists: core::extracted_name(&s.archive).map(|n| out_dir.join(n).exists()).unwrap_or(false),
         })
         .collect();
     Ok(ScanResult {
@@ -194,7 +202,7 @@ fn reporter(app: tauri::AppHandle, started: Instant) -> impl FnMut(core::Progres
 }
 
 #[tauri::command]
-fn start_join(app: tauri::AppHandle, state: State<AppState>, dir: String, archive: String, overwrite: bool) -> Result<(), String> {
+fn start_join(app: tauri::AppHandle, state: State<AppState>, dir: String, archive: String, overwrite: bool, action: String) -> Result<(), String> {
     let cancel = begin(&state)?;
     let out_dir = state.out_dir.clone();
     std::thread::spawn(move || {
@@ -206,10 +214,15 @@ fn start_join(app: tauri::AppHandle, state: State<AppState>, dir: String, archiv
                 .find(|s| s.archive == archive)
                 .ok_or_else(|| core::Error::Msg("קבוצת החלקים לא נמצאה יותר בתיקייה".into()))?;
             let mut rep = reporter(app.clone(), started);
-            core::join(&set, &out_dir, overwrite, &cancel, &mut rep)
+            if action == "extract" {
+                core::extract(&set, &out_dir, overwrite, &cancel, &mut rep)
+            } else {
+                core::join(&set, &out_dir, overwrite, &cancel, &mut rep)
+            }
         })();
+        let kind = if action == "extract" { "extract" } else { "join" };
         finish(&app, result.map(|r| DoneEvt {
-            kind: "join",
+            kind,
             name: r.output.file_name().unwrap().to_string_lossy().to_string(),
             output: r.output.to_string_lossy().to_string(),
             size: r.size,
@@ -271,7 +284,7 @@ fn cancel(state: State<AppState>) {
 
 /// מוחק את חלקי המקור (והמניפסט) אחרי הרכבה מאומתת, לבקשת המשתמש בלבד.
 #[tauri::command]
-fn delete_parts(dir: String, archive: String, state: State<AppState>) -> Result<u32, String> {
+fn delete_parts(dir: String, archive: String, action: String, state: State<AppState>) -> Result<u32, String> {
     if *state.busy.lock().unwrap() {
         return Err("פעולה רצה כרגע".into());
     }
@@ -279,10 +292,17 @@ fn delete_parts(dir: String, archive: String, state: State<AppState>) -> Result<
     let sets = core::find_sets(Path::new(&dir)).map_err(|e| e.to_string())?;
     let set = sets.into_iter().find(|s| s.archive == archive).ok_or("לא נמצאו חלקים")?;
     let m = set.manifest.as_ref().ok_or("אין מניפסט — לא מוחקים בלי אימות")?;
-    let joined = state.out_dir.join(&archive);
-    let len = std::fs::metadata(&joined).map_err(|_| "הקובץ המורכב לא נמצא".to_string())?.len();
-    if len != m.size {
-        return Err("הקובץ המורכב אינו תואם למניפסט — לא מוחקים".into());
+    // הקובץ שנוצר חייב להיות קיים ובגודל הנכון: הקובץ המורכב, או ה-DB שחולץ
+    let (joined, expect) = if action == "extract" {
+        let name = core::extracted_name(&archive).ok_or("הארכיון אינו .zst")?;
+        let exp = core::content_size(&set).ok_or("גודל ה-DB לא ידוע — לא מוחקים בלי אימות")?;
+        (state.out_dir.join(name), exp)
+    } else {
+        (state.out_dir.join(&archive), m.size)
+    };
+    let len = std::fs::metadata(&joined).map_err(|_| "הקובץ שנוצר לא נמצא".to_string())?.len();
+    if len != expect {
+        return Err("הקובץ שנוצר אינו תואם למצופה — לא מוחקים".into());
     }
     let mut n = 0;
     for p in set.parts.iter().chain(set.manifest_path.iter()) {

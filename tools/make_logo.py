@@ -6,12 +6,17 @@ logo=Image.open('iconnew.png').convert('RGBA')
 def clean(logo):
     import cv2
     a=np.array(logo.convert('RGB')).astype(float)
-    top=np.array([231,233,226.]); bot=np.array([228,225,222.])
-    t=np.clip((np.arange(S)[:,None]-240)/430,0,1)[...,None]
-    fill=top*(1-t)+bot*t; fill=np.broadcast_to(fill,(S,S,3))
-    mask=np.zeros((S,S),np.uint8); mask[294:654,376:668]=255; mask[242:294,396:650]=255
+    PY=[240,330,400,450,480,560,650,700]
+    PC=np.array([(231,232,226),(229,229,224),(229,229,224),(228,227,222),(225,224,220),(223,222,218),(225,224,219),(225,224,219)],float)
+    fill=np.stack([np.interp(np.arange(S),PY,PC[:,i]) for i in range(3)],-1)[:,None,:]
+    fill=np.broadcast_to(fill,(S,S,3))
+    mask=np.zeros((S,S),np.uint8); mask[294:669,376:668]=255; mask[242:294,396:650]=255
     m=(cv2.GaussianBlur(mask,(0,0),13)/255.0)[...,None]
     m=np.clip((m-0.12)*1.5,0,1)
+    # שומרים על פסגות הרגליים של הסוגריים (זהב) מתחת לגבול התיקון
+    gold=((a[...,0]-a[...,2])>45); gold[:668,:]=False
+    gold=cv2.dilate(gold.astype(np.uint8),np.ones((3,3),np.uint8))>0
+    m=m*(1-gold[...,None])
     out=a*(1-m)+fill*m
     res=np.dstack([np.clip(out,0,255),np.array(logo)[...,3]]).astype(np.uint8)
     return Image.fromarray(res,'RGBA')

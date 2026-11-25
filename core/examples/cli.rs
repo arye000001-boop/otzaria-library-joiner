@@ -14,6 +14,13 @@ fn main() {
                 println!("{:?}", r);
             }
         }
+        "extract" => {
+            let sets = find_sets(Path::new(&a[2])).unwrap();
+            for s in sets {
+                let r = extract(&s, Path::new(&a[3]), true, &cancel, &mut p).unwrap();
+                println!("{:?}", r);
+            }
+        }
         "compress" => {
             let r = compress(Path::new(&a[2]), Path::new(&a[3]), a[4].parse().unwrap(), true, &cancel, &mut p).unwrap();
             println!("{:?}", r);

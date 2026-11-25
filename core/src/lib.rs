@@ -375,3 +375,167 @@ pub fn compress(
 pub fn free_space(dir: &Path) -> Option<u64> {
     fs2::available_space(dir).ok()
 }
+
+
+/// גודל ה-DB אחרי הפענוח, כפי שנכתב בכותרת קובץ ה-zstd (None אם לא מופיע).
+pub fn content_size(set: &SplitSet) -> Option<u64> {
+    let mut f = File::open(set.parts.first()?).ok()?;
+    let mut head = [0u8; 32];
+    let n = f.read(&mut head).ok()?;
+    zstd::zstd_safe::get_frame_content_size(&head[..n]).ok().flatten()
+}
+
+/// שם קובץ ה-DB שייווצר בחילוץ (שם הארכיון בלי `.zst`).
+pub fn extracted_name(archive: &str) -> Option<String> {
+    archive.strip_suffix(".zst").filter(|n| !n.is_empty()).map(|n| n.to_string())
+}
+
+/// קורא את החלקים ברצף כזרם אחד, ומחשב SHA-256 לכל חלק ולכלל הארכיון תוך כדי הקריאה.
+struct PartsReader<'a> {
+    set: &'a SplitSet,
+    idx: usize,
+    cur: Option<BufReader<File>>,
+    part_hash: Sha256,
+    whole: Sha256,
+    done: u64,
+    cancel: &'a AtomicBool,
+    progress: &'a mut dyn FnMut(Progress),
+    problem: Option<String>,
+}
+
+impl<'a> PartsReader<'a> {
+    fn fail<T>(&mut self, m: String) -> io::Result<T> {
+        self.problem = Some(m.clone());
+        Err(io::Error::new(io::ErrorKind::Other, m))
+    }
+}
+
+impl<'a> Read for PartsReader<'a> {
+    fn read(&mut self, buf: &mut [u8]) -> io::Result<usize> {
+        loop {
+            if self.cancel.load(Ordering::Relaxed) {
+                return Err(io::Error::new(io::ErrorKind::Other, "cancelled"));
+            }
+            if self.cur.is_none() {
+                if self.idx >= self.set.parts.len() {
+                    return Ok(0);
+                }
+                self.cur = Some(BufReader::with_capacity(BUF, File::open(&self.set.parts[self.idx])?));
+                self.part_hash = Sha256::new();
+            }
+            let n = self.cur.as_mut().unwrap().read(buf)?;
+            if n > 0 {
+                self.part_hash.update(&buf[..n]);
+                self.whole.update(&buf[..n]);
+                self.done += n as u64;
+                (self.progress)(Progress {
+                    phase: "extract",
+                    done: self.done,
+                    total: self.set.total,
+                    part_index: self.idx,
+                    part_count: self.set.parts.len(),
+                });
+                return Ok(n);
+            }
+            // הגענו לסוף החלק: מאמתים אותו מול המניפסט לפני שממשיכים
+            if let Some(m) = &self.set.manifest {
+                let got = hex(&std::mem::take(&mut self.part_hash).finalize());
+                if got != m.parts[self.idx].sha256 {
+                    let name = m.parts[self.idx].name.clone();
+                    return self.fail(format!("בדיקת SHA-256 נכשלה בחלק {name} — הקובץ פגום, הורד אותו מחדש"));
+                }
+            }
+            self.cur = None;
+            self.idx += 1;
+        }
+    }
+}
+
+/// מחבר את החלקים ופותח אותם ישר לקובץ ה-DB, בלי קובץ `.zst` ביניים.
+/// מאומתים: SHA-256 של כל חלק ושל הארכיון (מול המניפסט), וסכום הביקורת הפנימי של zstd.
+/// הכתיבה לקובץ זמני `.extracting`; רק אחרי הצלחה מלאה הוא מקבל את שמו הסופי.
+pub fn extract(
+    set: &SplitSet,
+    out_dir: &Path,
+    overwrite: bool,
+    cancel: &AtomicBool,
+    progress: &mut dyn FnMut(Progress),
+) -> Result<JoinReport> {
+    precheck(set)?;
+    let name = extracted_name(&set.archive)
+        .ok_or_else(|| Error::Msg("חילוץ נתמך רק לקבצי .zst".into()))?;
+    let final_path = out_dir.join(&name);
+    if final_path.exists() && !overwrite {
+        return msg(format!("הקובץ {name} כבר קיים בתיקייה"));
+    }
+    // מקום נדרש: גודל ה-DB מהכותרת, ואם אינו ידוע, הערכה שמרנית
+    check_free_space(out_dir, content_size(set).unwrap_or(set.total.saturating_mul(4)))?;
+
+    let tmp_path = out_dir.join(format!("{name}.extracting"));
+    let mut guard = TempGuard(tmp_path.clone(), false);
+    let mut out = BufWriter::with_capacity(BUF, File::create(&tmp_path)?);
+
+    let mut rd = PartsReader {
+        set,
+        idx: 0,
+        cur: None,
+        part_hash: Sha256::new(),
+        whole: Sha256::new(),
+        done: 0,
+        cancel,
+        progress,
+        problem: None,
+    };
+    let mut produced = 0u64;
+    let res: io::Result<()> = (|| {
+        let mut dec = zstd::stream::read::Decoder::new(&mut rd)?;
+        let mut buf = vec![0u8; 4 << 20];
+        loop {
+            let n = dec.read(&mut buf)?;
+            if n == 0 {
+                break;
+            }
+            out.write_all(&buf[..n])?;
+            produced += n as u64;
+        }
+        Ok(())
+    })();
+    if cancel.load(Ordering::Relaxed) {
+        return Err(Error::Cancelled);
+    }
+    if let Some(p) = rd.problem.take() {
+        return msg(p);
+    }
+    if let Err(e) = res {
+        return msg(format!("הפענוח נכשל: {e}. ייתכן שהקבצים פגומים או שאינם בפורמט zstd"));
+    }
+    // מוודאים שכל הבייטים נקראו ושכל החלקים אומתו (למקרה שיש נתונים אחרי סוף הזרם)
+    io::copy(&mut rd, &mut io::sink()).map_err(|e| Error::Msg(rd.problem.clone().unwrap_or(e.to_string())))?;
+    if let Some(p) = rd.problem.take() {
+        return msg(p);
+    }
+    out.flush()?;
+    out.get_ref().sync_all()?;
+    drop(out);
+
+    let sha = hex(&std::mem::replace(&mut rd.whole, Sha256::new()).finalize());
+    if let Some(m) = &set.manifest {
+        if rd.done != m.size {
+            return msg(format!("גודל הארכיון שנקרא {} שונה מהמניפסט {}", rd.done, m.size));
+        }
+        if sha != m.sha256 {
+            return msg("ה-SHA-256 של הארכיון שונה מהמניפסט");
+        }
+    }
+    if let Some(expect) = content_size(set) {
+        if produced != expect {
+            return msg(format!("גודל ה-DB שחולץ ({produced}) שונה מהמצופה ({expect})"));
+        }
+    }
+    if final_path.exists() {
+        fs::remove_file(&final_path)?;
+    }
+    fs::rename(&tmp_path, &final_path)?;
+    guard.1 = true;
+    Ok(JoinReport { output: final_path, size: produced, sha256: sha, verified: set.manifest.is_some() })
+}

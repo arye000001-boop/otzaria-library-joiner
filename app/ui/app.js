@@ -5,7 +5,7 @@ const listen = T.event.listen;
 const win = T.window.getCurrentWindow();
 const $ = (id) => document.getElementById(id);
 
-const S = { mode: "join", scan: null, set: null, file: null, done: null, info: null };
+const S = { mode: "join", action: "join", scan: null, set: null, file: null, done: null, info: null };
 
 // ---------- עזרים ----------
 function human(n) {
@@ -34,20 +34,24 @@ function card({ icon, label, value, sub, side, ltrValue, cls, mark }) {
   const ct = el("div", "ct");
   if (label) ct.append(el("div", "l", label));
   const v = el("div", "v"); if (ltrValue) v.append(ltr(value)); else v.textContent = value; ct.append(v);
-  if (sub) ct.append(el("div", "s", sub));
+  if (sub) { const sd = el("div", "s"); (Array.isArray(sub) ? sub : [sub]).forEach((p) => sd.append(typeof p === "string" ? document.createTextNode(p) : ltr(p.n))); ct.append(sd); }
   if (side) ct.append(el("div", "f", side));
   c.append(ct);
   return c;
 }
-function stepLabel(n) { return `שלב ${n} מתוך 3`; }
+function stepLabel(n, total) { return `שלב ${n} מתוך ${total}`; }
 function show(id) {
   document.querySelectorAll(".screen").forEach((s) => (s.hidden = s.id !== id));
-  const step = { "s-pick": 1, "s-cpick": 1, "s-ready": 2, "s-progress": 3 }[id];
+  const total = S.mode === "join" ? 4 : 3;
+  const map = S.mode === "join"
+    ? { "s-pick": 1, "s-action": 2, "s-ready": 3, "s-progress": 4 }
+    : { "s-cpick": 1, "s-ready": 2, "s-progress": 3 };
+  const step = map[id];
   document.querySelectorAll(`#${id} .dots`).forEach((d) => {
     d.textContent = "";
-    for (let i = 1; i <= 3; i++) d.append(el("i", i === step ? "on" : ""));
+    for (let i = 1; i <= total; i++) d.append(el("i", i === step ? "on" : ""));
   });
-  document.querySelectorAll(`#${id} .steplabel`).forEach((l) => (l.textContent = step ? stepLabel(step) : ""));
+  document.querySelectorAll(`#${id} .steplabel`).forEach((l) => (l.textContent = step ? stepLabel(step, total) : ""));
 }
 document.querySelectorAll("[data-back]").forEach((b) => b.addEventListener("click", () => show(b.dataset.back)));
 
@@ -95,17 +99,45 @@ function otherFolderButton() {
   b.onclick = async () => { const p = await invoke("pick_folder"); if (p) loadScan(p); };
   return b;
 }
-$("pick-next").onclick = () => renderReady();
+$("pick-next").onclick = () => renderActions();
+
+// ---------- מה לעשות: הרכבה או חילוץ ישר ----------
+function renderActions() {
+  const s = S.set, list = $("action-list"); list.textContent = "";
+  const canExtract = !!s.extractName;
+  S.action = "join";
+  const opts = [
+    { id: "join", icon: IC.archive, value: "הרכבה לקובץ אחד", ltrName: s.archive,
+      sub: ["מחבר את החלקים אל ", { n: s.archive }, " ומאמת. מהיר, וחוסך מקום."], side: `מקום נדרש: ${human(s.total)}` },
+    { id: "extract", icon: IC.parts, value: "חילוץ ישר לקובץ DB", ltrName: s.extractName,
+      sub: canExtract ? ["מחבר ופותח בבת אחת אל ", { n: s.extractName }, ", בלי קובץ ביניים."] : "זמין רק לקבצי zst.",
+      side: canExtract ? `מקום נדרש: ${s.contentSize ? human(s.contentSize) : "כ-" + human(s.total * 4)}` : null, disabled: !canExtract },
+  ];
+  opts.forEach((o) => {
+    const c = card({ icon: o.icon, value: o.value, sub: o.sub, side: o.side, cls: o.disabled ? "bad" : "pick", mark: !o.disabled });
+    if (o.disabled) c.classList.remove("bad"), (c.style.opacity = ".55");
+    else c.onclick = () => {
+      list.querySelectorAll(".card").forEach((x) => x.classList.remove("sel"));
+      c.classList.add("sel"); S.action = o.id;
+    };
+    list.append(c);
+  });
+  list.querySelector(".card.pick").click();
+  show("s-action");
+}
+$("action-next").onclick = () => renderReady();
 
 // ---------- דחיסה: בחירה ----------
 $("go-compress").onclick = () => { S.mode = "compress"; S.file = null; renderCFile(); show("s-cpick"); };
 function renderCFile() {
   const box = $("cfile"); box.textContent = "";
   $("cpick-next").disabled = !S.file;
-  if (!S.file) { box.append(card({ icon: IC.warn, value: "עדיין לא נבחר קובץ" })); return; }
-  box.append(card({ icon: IC.archive, value: S.file.name, ltrValue: true, sub: human(S.file.size), cls: "sel", mark: true }));
+  if (!S.file) box.append(card({ icon: IC.warn, value: "עדיין לא נבחר קובץ" }));
+  else box.append(card({ icon: IC.archive, value: S.file.name, ltrValue: true, sub: human(S.file.size), cls: "sel", mark: true }));
+  const b = el("button", "btn tonal wide", S.file ? "בחירת קובץ אחר…" : "בחירת קובץ…");
+  b.onclick = async () => { const f = await invoke("pick_file"); if (f) { S.file = f; renderCFile(); } };
+  box.append(b);
 }
-$("cpick-file").onclick = async () => { const f = await invoke("pick_file"); if (f) { S.file = f; renderCFile(); } };
 $("cpick-next").onclick = () => renderReady();
 
 // ---------- מוכנים ----------
@@ -121,17 +153,22 @@ function renderReady() {
   let canStart = true, free, need, outDir;
   S.overwrite = false;
   if (S.mode === "join") {
-    const s = S.set; free = S.scan.free; outDir = S.scan.outDir; need = s.total + (64 << 20);
-    $("ready-title").textContent = "מוכנים להרכיב";
+    const s = S.set, ex = S.action === "extract";
+    free = S.scan.free; outDir = S.scan.outDir;
+    const outName = ex ? s.extractName : s.archive;
+    need = (ex ? (s.contentSize || s.total * 4) : s.total) + (64 << 20);
+    $("ready-title").textContent = ex ? "מוכנים לחלץ" : "מוכנים להרכיב";
     $("ready-hint").textContent = "בדוק שהכל נראה כמו שצריך ולחץ על התחל.";
-    box.append(card({ icon: IC.archive, label: "ייווצר הקובץ", value: s.archive, ltrValue: true }));
+    box.append(card({ icon: IC.archive, label: "ייווצר הקובץ", value: outName, ltrValue: true, sub: ex && s.contentSize ? human(s.contentSize) : null }));
     box.append(card({ icon: IC.parts, label: "חלקים", value: `${s.parts.length} חלקים · ${human(s.total)}` }));
-    box.append(card({ icon: IC.check, label: "אימות", value: s.hasManifest ? "SHA-256 מול המניפסט" : "אין מניפסט — לא ניתן לאמת" }));
-    S.overwrite = s.existsInOut;
-    if (s.existsInOut) note(alert, `הקובץ ${s.archive} כבר קיים בתיקייה ויוחלף.`, true);
-    else if (!s.hasManifest) note(alert, "לא נמצא קובץ מניפסט, ההרכבה תתבצע בלי אימות. מומלץ לשים אותו ליד החלקים.", true);
+    box.append(card({ icon: IC.check, label: "אימות",
+      value: s.hasManifest ? "SHA-256 מול המניפסט" : "אין מניפסט — לא ניתן לאמת",
+      sub: ex ? "וגם סכום הביקורת הפנימי של zstd" : null }));
+    S.overwrite = ex ? s.extractExists : s.existsInOut;
+    if (S.overwrite) note(alert, `הקובץ ${outName} כבר קיים בתיקייה ויוחלף.`, true);
+    else if (!s.hasManifest) note(alert, `לא נמצא קובץ מניפסט, ה${ex ? "חילוץ" : "הרכבה"} יתבצע בלי אימות מול המניפסט. מומלץ לשים אותו ליד החלקים.`, true);
     S.delAfter = false; addDelCheck(box, s.hasManifest);
-    $("start").textContent = "התחל הרכבה";
+    $("start").textContent = ex ? "התחל חילוץ" : "התחל הרכבה";
   } else {
     const f = S.file; free = f.free; outDir = f.outDir; need = f.size + (64 << 20);
     $("ready-title").textContent = "מוכנים לדחוס";
@@ -155,21 +192,23 @@ function renderReady() {
   show("s-ready");
 }
 function note(a, text, warn) { a.textContent = text; a.hidden = false; a.className = "alert" + (warn ? " warn" : ""); }
-$("ready-back").onclick = () => show(S.mode === "join" ? "s-pick" : "s-cpick");
+$("ready-back").onclick = () => show(S.mode === "join" ? "s-action" : "s-cpick");
 
 // ---------- ריצה ----------
 $("start").onclick = async () => {
   $("pct").textContent = "0%"; $("bar-fill").style.width = "0%";
   $("prog-meta").textContent = ""; $("prog-size").textContent = ""; $("prog-speed").textContent = "";
   $("stop").disabled = false;
-  if (S.mode === "join") {
+  if (S.mode === "join" && S.action === "extract") {
+    $("prog-title").textContent = "מחלץ את הספרייה…"; $("prog-sub").textContent = "מחבר ופותח בבת אחת, בלי קובץ ביניים.";
+  } else if (S.mode === "join") {
     $("prog-title").textContent = "מרכיב את הספרייה…"; $("prog-sub").textContent = "אפשר לעצור בכל רגע, לא יישאר קובץ חלקי.";
   } else {
     $("prog-title").textContent = "דוחס את הקובץ…"; $("prog-sub").textContent = "רמה 19 איטית בכוונה, כדי להגיע לאותו גודל כמו הספרייה.";
   }
   show("s-progress");
   try {
-    if (S.mode === "join") await invoke("start_join", { dir: S.set.dir, archive: S.set.archive, overwrite: S.overwrite });
+    if (S.mode === "join") await invoke("start_join", { dir: S.set.dir, archive: S.set.archive, overwrite: S.overwrite, action: S.action });
     else await invoke("start_compress", { path: S.file.path, overwrite: S.overwrite });
   } catch (e) { fail(String(e)); }
 };
@@ -179,6 +218,7 @@ listen("progress", (ev) => {
   const p = ev.payload; const pct = p.total ? (p.done / p.total) * 100 : 0;
   $("pct").textContent = `${Math.floor(pct)}%`; $("bar-fill").style.width = `${pct}%`;
   if (p.phase === "join") $("prog-meta").textContent = `מחבר חלק ${p.partIndex + 1} מתוך ${p.partCount}`;
+  else if (p.phase === "extract") $("prog-meta").textContent = `מחלץ מחלק ${p.partIndex + 1} מתוך ${p.partCount}`;
   else $("prog-meta").textContent = "דוחס…";
   const eta = p.speed > 0 ? (p.total - p.done) / p.speed : 0;
   $("prog-speed").textContent = `${human(p.speed)} בשנייה · נותרו כ-${dur(eta)}`;
@@ -188,7 +228,7 @@ listen("finished", async (ev) => {
   const d = (S.done = ev.payload);
   const box = $("done-cards"); box.textContent = "";
   box.append(card({ icon: IC.archive, label: "קובץ", value: d.name, ltrValue: true }));
-  if (d.kind === "join") {
+  if (d.kind === "join" || d.kind === "extract") {
     box.append(card({ icon: IC.parts, label: "גודל", value: human(d.size) }));
     box.append(card({ icon: IC.check, label: "אימות", value: d.verified ? "אומת מול המניפסט ✓" : "לא אומת (אין מניפסט)", sub: d.sha256 ? "\u2066SHA-256: " + d.sha256.slice(0, 16) + "…\u2069" : null }));
   } else {
@@ -196,7 +236,7 @@ listen("finished", async (ev) => {
   }
   box.append(card({ icon: IC.sync, label: "משך הפעולה", value: dur(d.seconds) }));
   if (d.partsDeletable && S.mode === "join") {
-    const b = el("button", "btn tonal wide", "מחק את החלקים (נשמר רק הקובץ המורכב)");
+    const b = el("button", "btn tonal wide", d.kind === "extract" ? "מחק את החלקים (נשמר רק קובץ ה-DB)" : "מחק את החלקים (נשמר רק הקובץ המורכב)");
     b.id = "del-now";
     b.onclick = () => { if (b.dataset.armed) return deleteParts(); b.dataset.armed = "1"; b.textContent = "לחץ שוב לאישור המחיקה"; };
     box.append(b);
@@ -214,7 +254,7 @@ function fail(msg) { $("err-badge").className = "badge bad"; $("err-title").text
 
 async function deleteParts() {
   const b = $("del-now") || el("button");
-  try { const n = await invoke("delete_parts", { dir: S.set.dir, archive: S.set.archive }); b.textContent = `נמחקו ${n} קבצים`; }
+  try { const n = await invoke("delete_parts", { dir: S.set.dir, archive: S.set.archive, action: S.action }); b.textContent = `נמחקו ${n} קבצים`; }
   catch (e) { b.textContent = String(e); }
   b.disabled = true;
 }

@@ -33,7 +33,7 @@ main{position:absolute;inset:32px 0 0 0}
 /* אזור פנימי: מתחת לשלבים ומעל הכותרת התחתונה (footer מתחיל ב-592 מראש החלון = 560 מתחת לשורת הכותרת) */
 .inner{position:absolute;inset:0 0 68px 0;padding:0 24px;overflow:hidden}
 .steps{height:44px;position:relative;margin-inline:-24px}
-.dots{position:absolute;top:10px;inset-inline:0;display:flex;justify-content:center;gap:6px;direction:ltr}
+.dots{position:absolute;top:10px;inset-inline:0;display:flex;justify-content:center;gap:6px}
 .dots i{width:6px;height:6px;border-radius:3px;background:var(--variant)} .dots i.on{width:20px;background:var(--primary)}
 .steplabel{position:absolute;top:22px;inset-inline:0;text-align:center;font-size:12px;color:var(--outline)}
 .hdr{text-align:center}
@@ -57,7 +57,7 @@ main{position:absolute;inset:32px 0 0 0}
 .mark{flex:none;width:20px;height:20px}
 .radio{border:2px solid var(--outline);border-radius:50%}
 .card.sel .radio{border-color:var(--primary);background:radial-gradient(var(--primary) 0 4.5px,transparent 5.5px)}
-.ltr{direction:ltr;unicode-bidi:isolate;display:inline-block;text-align:left}
+.ltr{direction:ltr;unicode-bidi:isolate;display:inline-block;text-align:left;white-space:nowrap}
 
 /* כפתורים: 40/44 גובה, רדיוס 8, טקסט 14 */
 .btn{height:40px;min-width:120px;padding:0 20px;border:0;border-radius:var(--r);font:600 14px "Segoe UI","Segoe UI Variable Text",system-ui,sans-serif;cursor:pointer;display:inline-flex;align-items:center;justify-content:center;gap:8px;transition:background .1s}
@@ -83,12 +83,12 @@ main{position:absolute;inset:32px 0 0 0}
 
 /* התקדמות */
 .prog{position:absolute;inset:0 0 68px 0;padding:0 24px}
-.pct{position:absolute;top:100px;inset-inline:24px;text-align:center;font-size:40px;font-weight:600;color:var(--primary);direction:ltr;font-variant-numeric:tabular-nums}
-#s-progress .cap{position:absolute;top:162px;inset-inline:24px;text-align:center;font-size:14px}
-.bar{position:absolute;top:210px;inset-inline:24px;height:8px;border-radius:4px;background:var(--track);overflow:hidden}
+.pct{position:absolute;top:122px;inset-inline:24px;text-align:center;font-size:40px;font-weight:600;color:var(--primary);direction:ltr;font-variant-numeric:tabular-nums}
+#s-progress .cap{position:absolute;top:184px;inset-inline:24px;text-align:center;font-size:14px}
+.bar{position:absolute;top:226px;inset-inline:24px;height:8px;border-radius:4px;background:var(--track);overflow:hidden}
 #bar-fill{height:100%;width:0;background:var(--primary);border-radius:4px;transition:width .12s linear}
-#s-progress .speed{position:absolute;top:232px;inset-inline:24px;text-align:center;font-size:13px;color:var(--muted)}
-#s-progress .bytes{position:absolute;top:254px;inset-inline:24px;text-align:center;font-size:13px;color:var(--outline)}
+#s-progress .speed{position:absolute;top:248px;inset-inline:24px;text-align:center;font-size:13px;color:var(--muted)}
+#s-progress .bytes{position:absolute;top:270px;inset-inline:24px;text-align:center;font-size:13px;color:var(--outline)}
 
 /* סיום ושגיאה: תג 72 */
 .badge{position:absolute;top:40px;left:50%;margin-left:-36px;width:72px;height:72px;border-radius:50%;display:grid;place-items:center;background:var(--primary);color:#fff;font-size:34px}
@@ -101,3 +101,9 @@ main{position:absolute;inset:32px 0 0 0}
 .check{display:flex;gap:12px;align-items:center;font-size:13px;cursor:pointer;background:var(--card);padding:12px 16px;border-radius:var(--r)}
 .check input{accent-color:var(--primary);width:18px;height:18px}
 ::-webkit-scrollbar{width:6px}::-webkit-scrollbar-thumb{background:var(--variant);border-radius:3px}
+
+/* כפתורים בערימה (מסך סיום ושגיאה): ראשי רחב ומתחתיו טקסט, כמו במסייע */
+.footer.stack{flex-direction:column;justify-content:flex-end;gap:4px;height:auto;border:0;padding:0 24px 14px}
+.footer.stack .btn.ghost{height:36px}
+.fin-body{bottom:112px}
+.bar{direction:ltr}
