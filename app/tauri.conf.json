@@ -1,7 +1,6 @@
 {
   "$schema": "https://schema.tauri.app/config/2",
   "productName": "Otzaria Library Joiner",
-  "version": "1.4.0",
   "identifier": "org.otzaria.libraryjoiner",
   "build": { "frontendDist": "./ui" },
   "app": {

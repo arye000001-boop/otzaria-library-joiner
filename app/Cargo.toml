@@ -1,6 +1,6 @@
 [package]
 name = "otzaria-joiner"
-version = "1.4.0"
+version.workspace = true
 edition = "2021"
 description = "מרכיב הספרייה של אוצריא — הרכבת קבצי ספרייה מפוצלים לקובץ אחד"
 

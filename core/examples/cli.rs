@@ -22,7 +22,15 @@ fn main() {
             }
         }
         "compress" => {
-            let r = compress(Path::new(&a[2]), Path::new(&a[3]), a[4].parse().unwrap(), true, &cancel, &mut p).unwrap();
+            let r = compress(
+                Path::new(&a[2]),
+                Path::new(&a[3]),
+                a[4].parse().unwrap(),
+                true,
+                &cancel,
+                &mut p,
+            )
+            .unwrap();
             println!("{:?}", r);
         }
         _ => {}

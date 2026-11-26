@@ -1,6 +1,6 @@
 [package]
 name = "joiner-core"
-version = "1.4.0"
+version.workspace = true
 edition = "2021"
 
 [dependencies]

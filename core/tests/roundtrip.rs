@@ -1,7 +1,7 @@
 use joiner_core::*;
 use sha2::{Digest, Sha256};
 use std::fs;
-use std::path::PathBuf;
+use std::path::{Path, PathBuf};
 use std::sync::atomic::AtomicBool;
 
 fn tmpdir(name: &str) -> PathBuf {
@@ -11,25 +11,41 @@ fn tmpdir(name: &str) -> PathBuf {
     d
 }
 fn sha(b: &[u8]) -> String {
-    Sha256::digest(b).iter().map(|x| format!("{x:02x}")).collect()
+    Sha256::digest(b)
+        .iter()
+        .map(|x| format!("{x:02x}"))
+        .collect()
 }
 /// יוצר חלקים ומניפסט באותה צורה ש-split_release_asset.sh מייצר
-fn make_split(dir: &PathBuf, name: &str, data: &[u8], part: usize) {
+fn make_split(dir: &Path, name: &str, data: &[u8], part: usize) {
     let mut parts = vec![];
     for (i, c) in data.chunks(part).enumerate() {
         let n = format!("{name}.part-{i:03}");
         fs::write(dir.join(&n), c).unwrap();
-        parts.push(format!(r#"{{"name":"{n}","size":{},"sha256":"{}"}}"#, c.len(), sha(c)));
+        parts.push(format!(
+            r#"{{"name":"{n}","size":{},"sha256":"{}"}}"#,
+            c.len(),
+            sha(c)
+        ));
     }
     let m = format!(
         r#"{{"schemaVersion":1,"archive":"{name}","size":{},"sha256":"{}","partSizeLimit":{part},"githubAssetLimit":2147483648,"parts":[{}]}}"#,
-        data.len(), sha(data), parts.join(",")
+        data.len(),
+        sha(data),
+        parts.join(",")
     );
     fs::write(dir.join(format!("{name}.manifest.json")), m).unwrap();
 }
 fn data(n: usize) -> Vec<u8> {
     let mut x = 12345u64;
-    (0..n).map(|_| { x = x.wrapping_mul(6364136223846793005).wrapping_add(1442695040888963407); (x >> 56) as u8 }).collect()
+    (0..n)
+        .map(|_| {
+            x = x
+                .wrapping_mul(6364136223846793005)
+                .wrapping_add(1442695040888963407);
+            (x >> 56) as u8
+        })
+        .collect()
 }
 
 #[test]
@@ -105,10 +121,20 @@ fn refuses_to_overwrite_unless_asked() {
 fn compress_roundtrip_and_frame_parameters() {
     let d = tmpdir("cmp");
     let mut text = Vec::new();
-    for i in 0..200_000 { text.extend_from_slice(format!("שורה {i} של טקסט עברי לדוגמה\n").as_bytes()); }
+    for i in 0..200_000 {
+        text.extend_from_slice(format!("שורה {i} של טקסט עברי לדוגמה\n").as_bytes());
+    }
     fs::write(d.join("x.db"), &text).unwrap();
     let out = tmpdir("cmpout");
-    let r = compress(&d.join("x.db"), &out, 2, false, &AtomicBool::new(false), &mut |_| {}).unwrap();
+    let r = compress(
+        &d.join("x.db"),
+        &out,
+        2,
+        false,
+        &AtomicBool::new(false),
+        &mut |_| {},
+    )
+    .unwrap();
     let z = fs::read(&r.output).unwrap();
     assert_eq!(&z[..4], &[0x28, 0xb5, 0x2f, 0xfd]);
     assert_ne!(z[4] & 0x04, 0, "סכום ביקורת חייב להיות פעיל");
@@ -120,7 +146,9 @@ fn unknown_manifest_version_is_blocked_not_silently_unverified() {
     let d = tmpdir("ver");
     make_split(&d, "lib.db.zst", &data(1_500_000), 1_000_000);
     let m = d.join("lib.db.zst.manifest.json");
-    let txt = fs::read_to_string(&m).unwrap().replace("\"schemaVersion\":1", "\"schemaVersion\":2");
+    let txt = fs::read_to_string(&m)
+        .unwrap()
+        .replace("\"schemaVersion\":1", "\"schemaVersion\":2");
     fs::write(&m, txt).unwrap();
     let sets = find_sets(&d).unwrap();
     let e = precheck(&sets[0]).unwrap_err().to_string();
@@ -143,7 +171,6 @@ fn many_parts_in_order_including_three_and_four() {
         assert_eq!(fs::read(&r.output).unwrap(), orig);
     }
 }
-
 
 /// באותו מבנה כמו קבצי הספרייה: סכום ביקורת פעיל וגודל התוכן בכותרת
 fn zst(data: &[u8]) -> Vec<u8> {
@@ -171,7 +198,10 @@ fn extract_streams_parts_directly_to_db() {
     assert!(r.verified);
     assert_eq!(r.output.file_name().unwrap(), "seforim-x.db");
     assert_eq!(fs::read(&r.output).unwrap(), db);
-    assert!(!out.join("seforim-x.db.zst").exists(), "אסור ליצור קובץ zst ביניים");
+    assert!(
+        !out.join("seforim-x.db.zst").exists(),
+        "אסור ליצור קובץ zst ביניים"
+    );
     assert!(!out.join("seforim-x.db.extracting").exists());
 }
 
@@ -182,7 +212,8 @@ fn extract_rejects_corruption_and_cleans_up() {
     make_split(&d, "a.db.zst", &z, z.len() / 2 + 1);
     let p = d.join("a.db.zst.part-001");
     let mut b = fs::read(&p).unwrap();
-    let l = b.len(); b[l / 2] ^= 0x55;
+    let l = b.len();
+    b[l / 2] ^= 0x55;
     fs::write(&p, b).unwrap();
     let sets = find_sets(&d).unwrap();
     let out = tmpdir("exbadout");
@@ -198,7 +229,10 @@ fn extract_detects_zstd_checksum_failure_without_manifest() {
     make_split(&d, "a.db.zst", &z, z.len() / 2 + 1);
     fs::remove_file(d.join("a.db.zst.manifest.json")).unwrap();
     let p = d.join("a.db.zst.part-000");
-    let mut b = fs::read(&p).unwrap(); let l = b.len(); b[l / 2] ^= 0x01; fs::write(&p, b).unwrap();
+    let mut b = fs::read(&p).unwrap();
+    let l = b.len();
+    b[l / 2] ^= 0x01;
+    fs::write(&p, b).unwrap();
     let sets = find_sets(&d).unwrap();
     let out = tmpdir("exckout");
     assert!(extract(&sets[0], &out, false, &AtomicBool::new(false), &mut |_| {}).is_err());
@@ -212,6 +246,9 @@ fn extract_content_size_and_name() {
     make_split(&d, "q.db.zst", &z, z.len() / 2 + 1);
     let sets = find_sets(&d).unwrap();
     assert_eq!(content_size(&sets[0]), Some(1_234_567));
-    assert_eq!(extracted_name("seforim-schema7.db.zst").as_deref(), Some("seforim-schema7.db"));
+    assert_eq!(
+        extracted_name("seforim-schema7.db.zst").as_deref(),
+        Some("seforim-schema7.db")
+    );
     assert_eq!(extracted_name("x.tar"), None);
 }

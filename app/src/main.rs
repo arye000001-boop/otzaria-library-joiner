@@ -19,7 +19,14 @@ fn exe_dir() -> PathBuf {
 struct AppState {
     cancel: Arc<AtomicBool>,
     busy: Mutex<bool>,
-    out_dir: PathBuf,
+    /// תיקיית הפלט. ברירת המחדל היא התיקייה שבה הקובץ רץ, והמשתמש יכול לבחור אחרת.
+    out_dir: Mutex<PathBuf>,
+}
+
+impl AppState {
+    fn out_dir(&self) -> PathBuf {
+        self.out_dir.lock().unwrap().clone()
+    }
 }
 
 #[derive(Serialize)]
@@ -66,7 +73,9 @@ fn scan_path(dir: &Path, out_dir: &Path) -> Result<ScanResult, String> {
             exists_in_out: out_dir.join(&s.archive).exists(),
             content_size: core::content_size(s),
             extract_name: core::extracted_name(&s.archive),
-            extract_exists: core::extracted_name(&s.archive).map(|n| out_dir.join(n).exists()).unwrap_or(false),
+            extract_exists: core::extracted_name(&s.archive)
+                .map(|n| out_dir.join(n).exists())
+                .unwrap_or(false),
         })
         .collect();
     Ok(ScanResult {
@@ -79,12 +88,12 @@ fn scan_path(dir: &Path, out_dir: &Path) -> Result<ScanResult, String> {
 
 #[tauri::command]
 fn scan(state: State<AppState>) -> Result<ScanResult, String> {
-    scan_path(&exe_dir(), &state.out_dir)
+    scan_path(&exe_dir(), &state.out_dir())
 }
 
 #[tauri::command]
 fn scan_dir(path: String, state: State<AppState>) -> Result<ScanResult, String> {
-    scan_path(Path::new(&path), &state.out_dir)
+    scan_path(Path::new(&path), &state.out_dir())
 }
 
 #[tauri::command]
@@ -114,8 +123,11 @@ struct FileInfo {
 }
 
 #[tauri::command]
-async fn pick_file(window: tauri::WebviewWindow, state: State<'_, AppState>) -> Result<Option<FileInfo>, String> {
-    let out_dir = state.out_dir.clone();
+async fn pick_file(
+    window: tauri::WebviewWindow,
+    state: State<'_, AppState>,
+) -> Result<Option<FileInfo>, String> {
+    let out_dir = state.out_dir();
     let picked = tauri::async_runtime::spawn_blocking(move || {
         rfd::FileDialog::new()
             .set_title("בחירת הקובץ לדחיסה")
@@ -136,6 +148,75 @@ async fn pick_file(window: tauri::WebviewWindow, state: State<'_, AppState>) -> 
             name,
         }
     }))
+}
+
+#[derive(Serialize)]
+#[serde(rename_all = "camelCase")]
+struct OutInfo {
+    out_dir: String,
+    free: Option<u64>,
+    /// true אם זו תיקיית התוכנה (ברירת המחדל)
+    is_default: bool,
+    /// לכל שם שנשאל עליו: האם הוא כבר קיים בתיקיית הפלט
+    exists: Vec<bool>,
+}
+
+fn out_info_for(dir: &Path, names: &[String]) -> OutInfo {
+    OutInfo {
+        out_dir: dir.to_string_lossy().to_string(),
+        free: core::free_space(dir),
+        is_default: dir == exe_dir(),
+        exists: names.iter().map(|n| dir.join(n).exists()).collect(),
+    }
+}
+
+/// מצב תיקיית הפלט הנוכחית: מקום פנוי, והאם קבצים בשמות הנתונים כבר קיימים בה.
+#[tauri::command]
+fn out_info(names: Vec<String>, state: State<AppState>) -> OutInfo {
+    out_info_for(&state.out_dir(), &names)
+}
+
+/// בודק שאפשר לכתוב לתיקייה, על ידי יצירה ומחיקה של קובץ ריק.
+fn check_writable(dir: &Path) -> Result<(), String> {
+    let probe = dir.join(".otzaria-joiner-write-test");
+    std::fs::File::create(&probe)
+        .map_err(|_| "אי אפשר לכתוב לתיקייה שנבחרה. בחר תיקייה אחרת.".to_string())?;
+    let _ = std::fs::remove_file(&probe);
+    Ok(())
+}
+
+/// פותח חלון בחירת תיקייה ומעדכן את תיקיית הפלט. מחזיר None אם המשתמש ביטל.
+#[tauri::command]
+async fn pick_out_dir(
+    names: Vec<String>,
+    window: tauri::WebviewWindow,
+    state: State<'_, AppState>,
+) -> Result<Option<OutInfo>, String> {
+    if *state.busy.lock().unwrap() {
+        return Err("פעולה רצה כרגע".into());
+    }
+    let start = state.out_dir();
+    let picked = tauri::async_runtime::spawn_blocking(move || {
+        rfd::FileDialog::new()
+            .set_title("בחירת תיקיית הפלט")
+            .set_directory(start)
+            .set_parent(&window)
+            .pick_folder()
+    })
+    .await
+    .map_err(|e| e.to_string())?;
+    let Some(dir) = picked else { return Ok(None) };
+    check_writable(&dir)?;
+    *state.out_dir.lock().unwrap() = dir.clone();
+    Ok(Some(out_info_for(&dir, &names)))
+}
+
+/// מחזיר את תיקיית הפלט לתיקיית התוכנה.
+#[tauri::command]
+fn reset_out_dir(names: Vec<String>, state: State<AppState>) -> OutInfo {
+    let dir = exe_dir();
+    *state.out_dir.lock().unwrap() = dir.clone();
+    out_info_for(&dir, &names)
 }
 
 #[derive(Serialize, Clone)]
@@ -202,9 +283,16 @@ fn reporter(app: tauri::AppHandle, started: Instant) -> impl FnMut(core::Progres
 }
 
 #[tauri::command]
-fn start_join(app: tauri::AppHandle, state: State<AppState>, dir: String, archive: String, overwrite: bool, action: String) -> Result<(), String> {
+fn start_join(
+    app: tauri::AppHandle,
+    state: State<AppState>,
+    dir: String,
+    archive: String,
+    overwrite: bool,
+    action: String,
+) -> Result<(), String> {
     let cancel = begin(&state)?;
-    let out_dir = state.out_dir.clone();
+    let out_dir = state.out_dir();
     std::thread::spawn(move || {
         let started = Instant::now();
         let result = (|| {
@@ -220,42 +308,67 @@ fn start_join(app: tauri::AppHandle, state: State<AppState>, dir: String, archiv
                 core::join(&set, &out_dir, overwrite, &cancel, &mut rep)
             }
         })();
-        let kind = if action == "extract" { "extract" } else { "join" };
-        finish(&app, result.map(|r| DoneEvt {
-            kind,
-            name: r.output.file_name().unwrap().to_string_lossy().to_string(),
-            output: r.output.to_string_lossy().to_string(),
-            size: r.size,
-            sha256: Some(r.sha256),
-            verified: r.verified,
-            input_size: None,
-            seconds: started.elapsed().as_secs_f64(),
-            parts_deletable: r.verified,
-        }));
+        let kind = if action == "extract" {
+            "extract"
+        } else {
+            "join"
+        };
+        finish(
+            &app,
+            result.map(|r| DoneEvt {
+                kind,
+                name: r.output.file_name().unwrap().to_string_lossy().to_string(),
+                output: r.output.to_string_lossy().to_string(),
+                size: r.size,
+                sha256: Some(r.sha256),
+                verified: r.verified,
+                input_size: None,
+                seconds: started.elapsed().as_secs_f64(),
+                parts_deletable: r.verified,
+            }),
+        );
     });
     Ok(())
 }
 
 #[tauri::command]
-fn start_compress(app: tauri::AppHandle, state: State<AppState>, path: String, overwrite: bool) -> Result<(), String> {
+fn start_compress(
+    app: tauri::AppHandle,
+    state: State<AppState>,
+    path: String,
+    overwrite: bool,
+) -> Result<(), String> {
     let cancel = begin(&state)?;
-    let out_dir = state.out_dir.clone();
+    let out_dir = state.out_dir();
     std::thread::spawn(move || {
         let started = Instant::now();
-        let workers = std::thread::available_parallelism().map(|n| n.get() as u32).unwrap_or(1).clamp(1, 16);
+        let workers = std::thread::available_parallelism()
+            .map(|n| n.get() as u32)
+            .unwrap_or(1)
+            .clamp(1, 16);
         let mut rep = reporter(app.clone(), started);
-        let result = core::compress(Path::new(&path), &out_dir, workers, overwrite, &cancel, &mut rep);
-        finish(&app, result.map(|r| DoneEvt {
-            kind: "compress",
-            name: r.output.file_name().unwrap().to_string_lossy().to_string(),
-            output: r.output.to_string_lossy().to_string(),
-            size: r.output_size,
-            sha256: None,
-            verified: true,
-            input_size: Some(r.input_size),
-            seconds: started.elapsed().as_secs_f64(),
-            parts_deletable: false,
-        }));
+        let result = core::compress(
+            Path::new(&path),
+            &out_dir,
+            workers,
+            overwrite,
+            &cancel,
+            &mut rep,
+        );
+        finish(
+            &app,
+            result.map(|r| DoneEvt {
+                kind: "compress",
+                name: r.output.file_name().unwrap().to_string_lossy().to_string(),
+                output: r.output.to_string_lossy().to_string(),
+                size: r.output_size,
+                sha256: None,
+                verified: true,
+                input_size: Some(r.input_size),
+                seconds: started.elapsed().as_secs_f64(),
+                parts_deletable: false,
+            }),
+        );
     });
     Ok(())
 }
@@ -269,10 +382,22 @@ fn finish(app: &tauri::AppHandle, result: Result<DoneEvt, core::Error>) {
             let _ = app.emit("finished", d);
         }
         Err(core::Error::Cancelled) => {
-            let _ = app.emit("failed", FailEvt { cancelled: true, message: "הפעולה נעצרה. לא נשאר שום קובץ חלקי.".into() });
+            let _ = app.emit(
+                "failed",
+                FailEvt {
+                    cancelled: true,
+                    message: "הפעולה נעצרה. לא נשאר שום קובץ חלקי.".into(),
+                },
+            );
         }
         Err(e) => {
-            let _ = app.emit("failed", FailEvt { cancelled: false, message: e.to_string() });
+            let _ = app.emit(
+                "failed",
+                FailEvt {
+                    cancelled: false,
+                    message: e.to_string(),
+                },
+            );
         }
     }
 }
@@ -284,23 +409,36 @@ fn cancel(state: State<AppState>) {
 
 /// מוחק את חלקי המקור (והמניפסט) אחרי הרכבה מאומתת, לבקשת המשתמש בלבד.
 #[tauri::command]
-fn delete_parts(dir: String, archive: String, action: String, state: State<AppState>) -> Result<u32, String> {
+fn delete_parts(
+    dir: String,
+    archive: String,
+    action: String,
+    state: State<AppState>,
+) -> Result<u32, String> {
     if *state.busy.lock().unwrap() {
         return Err("פעולה רצה כרגע".into());
     }
     // לא מוחקים אלא אם הקובץ המורכב קיים ותואם בגודל למניפסט
     let sets = core::find_sets(Path::new(&dir)).map_err(|e| e.to_string())?;
-    let set = sets.into_iter().find(|s| s.archive == archive).ok_or("לא נמצאו חלקים")?;
-    let m = set.manifest.as_ref().ok_or("אין מניפסט — לא מוחקים בלי אימות")?;
+    let set = sets
+        .into_iter()
+        .find(|s| s.archive == archive)
+        .ok_or("לא נמצאו חלקים")?;
+    let m = set
+        .manifest
+        .as_ref()
+        .ok_or("אין מניפסט — לא מוחקים בלי אימות")?;
     // הקובץ שנוצר חייב להיות קיים ובגודל הנכון: הקובץ המורכב, או ה-DB שחולץ
     let (joined, expect) = if action == "extract" {
         let name = core::extracted_name(&archive).ok_or("הארכיון אינו .zst")?;
         let exp = core::content_size(&set).ok_or("גודל ה-DB לא ידוע — לא מוחקים בלי אימות")?;
-        (state.out_dir.join(name), exp)
+        (state.out_dir().join(name), exp)
     } else {
-        (state.out_dir.join(&archive), m.size)
+        (state.out_dir().join(&archive), m.size)
     };
-    let len = std::fs::metadata(&joined).map_err(|_| "הקובץ שנוצר לא נמצא".to_string())?.len();
+    let len = std::fs::metadata(&joined)
+        .map_err(|_| "הקובץ שנוצר לא נמצא".to_string())?
+        .len();
     if len != expect {
         return Err("הקובץ שנוצר אינו תואם למצופה — לא מוחקים".into());
     }
@@ -327,7 +465,10 @@ fn reveal(path: String) {
     }
     #[cfg(not(windows))]
     {
-        let dir = Path::new(&path).parent().map(|p| p.to_path_buf()).unwrap_or_default();
+        let dir = Path::new(&path)
+            .parent()
+            .map(|p| p.to_path_buf())
+            .unwrap_or_default();
         let _ = std::process::Command::new("xdg-open").arg(dir).spawn();
     }
 }
@@ -336,7 +477,7 @@ fn reveal(path: String) {
 fn app_info(state: State<AppState>) -> serde_json::Value {
     serde_json::json!({
         "version": env!("CARGO_PKG_VERSION"),
-        "outDir": state.out_dir.to_string_lossy(),
+        "outDir": state.out_dir().to_string_lossy(),
         "cpus": std::thread::available_parallelism().map(|n| n.get()).unwrap_or(1),
     })
 }
@@ -348,9 +489,25 @@ fn main() {
     let cleanup = data_dir.clone();
 
     let app = tauri::Builder::default()
-        .manage(AppState { cancel: Arc::new(AtomicBool::new(false)), busy: Mutex::new(false), out_dir })
+        .manage(AppState {
+            cancel: Arc::new(AtomicBool::new(false)),
+            busy: Mutex::new(false),
+            out_dir: Mutex::new(out_dir),
+        })
         .invoke_handler(tauri::generate_handler![
-            scan, scan_dir, pick_folder, pick_file, start_join, start_compress, cancel, delete_parts, reveal, app_info
+            scan,
+            scan_dir,
+            pick_folder,
+            pick_file,
+            out_info,
+            pick_out_dir,
+            reset_out_dir,
+            start_join,
+            start_compress,
+            cancel,
+            delete_parts,
+            reveal,
+            app_info
         ])
         .setup(move |app| {
             let _ = std::fs::create_dir_all(&data_dir);
@@ -358,17 +515,25 @@ fn main() {
             {
                 // מסתיר את התיקייה כדי שלא תפריע בתצוגה
                 use std::os::windows::process::CommandExt;
-                let _ = std::process::Command::new("attrib").arg("+h").arg(&data_dir).creation_flags(0x0800_0000).status();
+                let _ = std::process::Command::new("attrib")
+                    .arg("+h")
+                    .arg(&data_dir)
+                    .creation_flags(0x0800_0000)
+                    .status();
             }
-            tauri::WebviewWindowBuilder::new(app, "main", tauri::WebviewUrl::App("index.html".into()))
-                .title("מרכיב הספרייה של אוצריא")
-                .inner_size(400.0, 660.0)
-                .resizable(false)
-                .maximizable(false)
-                .decorations(false)
-                .center()
-                .data_directory(data_dir.clone())
-                .build()?;
+            tauri::WebviewWindowBuilder::new(
+                app,
+                "main",
+                tauri::WebviewUrl::App("index.html".into()),
+            )
+            .title("מרכיב הספרייה של אוצריא")
+            .inner_size(400.0, 660.0)
+            .resizable(false)
+            .maximizable(false)
+            .decorations(false)
+            .center()
+            .data_directory(data_dir.clone())
+            .build()?;
             Ok(())
         })
         .build(tauri::generate_context!())

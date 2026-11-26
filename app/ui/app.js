@@ -147,15 +147,18 @@ function addDelCheck(box, enabled) {
   i.onchange = () => (S.delAfter = i.checked);
   l.append(i, el("span", null, "מחק את החלקים אחרי הרכבה מוצלחת ומאומתת")); box.append(l);
 }
-function renderReady() {
+async function renderReady() {
   const box = $("ready-cards"); box.textContent = "";
   const alert = el("div", "alert"); alert.hidden = true;
-  let canStart = true, free, need, outDir;
-  S.overwrite = false;
+  let canStart = true, need;
+  // שם הקובץ שייווצר, ומצב תיקיית הפלט הנוכחית (היא יכולה להשתנות בין פעם לפעם)
+  const outName = S.mode === "join" ? (S.action === "extract" ? S.set.extractName : S.set.archive) : S.file.name + ".zst";
+  let info;
+  try { info = await invoke("out_info", { names: [outName] }); } catch (e) { return fail(String(e)); }
+  const { free, outDir } = info;
+  S.overwrite = info.exists[0];
   if (S.mode === "join") {
     const s = S.set, ex = S.action === "extract";
-    free = S.scan.free; outDir = S.scan.outDir;
-    const outName = ex ? s.extractName : s.archive;
     need = (ex ? (s.contentSize || s.total * 4) : s.total) + (64 << 20);
     $("ready-title").textContent = ex ? "מוכנים לחלץ" : "מוכנים להרכיב";
     $("ready-hint").textContent = "בדוק שהכל נראה כמו שצריך ולחץ על התחל.";
@@ -164,25 +167,34 @@ function renderReady() {
     box.append(card({ icon: IC.check, label: "אימות",
       value: s.hasManifest ? "SHA-256 מול המניפסט" : "אין מניפסט — לא ניתן לאמת",
       sub: ex ? "וגם סכום הביקורת הפנימי של zstd" : null }));
-    S.overwrite = ex ? s.extractExists : s.existsInOut;
     if (S.overwrite) note(alert, `הקובץ ${outName} כבר קיים בתיקייה ויוחלף.`, true);
     else if (!s.hasManifest) note(alert, `לא נמצא קובץ מניפסט, ה${ex ? "חילוץ" : "הרכבה"} יתבצע בלי אימות מול המניפסט. מומלץ לשים אותו ליד החלקים.`, true);
     S.delAfter = false; addDelCheck(box, s.hasManifest);
     $("start").textContent = ex ? "התחל חילוץ" : "התחל הרכבה";
   } else {
-    const f = S.file; free = f.free; outDir = f.outDir; need = f.size + (64 << 20);
+    const f = S.file; need = f.size + (64 << 20);
     $("ready-title").textContent = "מוכנים לדחוס";
     $("ready-hint").textContent = "הדחיסה זהה לבניית הספרייה: zstd ברמה 19.";
     box.append(card({ icon: IC.archive, label: "קובץ מקור", value: f.name, ltrValue: true, sub: human(f.size) }));
     box.append(card({ icon: IC.parts, label: "ייווצר", value: f.name + ".zst", ltrValue: true }));
     box.append(card({ icon: IC.options, label: "דחיסה", value: "zstd רמה 19 · חלון 8MB · סכום ביקורת" }));
-    S.overwrite = f.existsInOut;
-    if (f.existsInOut) note(alert, `הקובץ ${f.name}.zst כבר קיים בתיקייה ויוחלף.`, true);
+    if (S.overwrite) note(alert, `הקובץ ${f.name}.zst כבר קיים בתיקייה ויוחלף.`, true);
     S.delAfter = false;
     $("start").textContent = "התחל דחיסה";
   }
-  box.append(card({ icon: IC.folder, label: "תיקיית הפלט (היחידה שנכתבת)", value: outDir, ltrValue: true,
+  box.append(card({ icon: IC.folder, label: "תיקיית הפלט", value: outDir, ltrValue: true,
     sub: free != null ? `מקום פנוי: ${human(free)}` : null }));
+  const chg = el("button", "btn tonal wide", "שינוי תיקיית הפלט…");
+  chg.onclick = async () => {
+    try { if (await invoke("pick_out_dir", { names: [outName] })) renderReady(); }
+    catch (e) { note(alert, String(e), false); }
+  };
+  box.append(chg);
+  if (!info.isDefault) {
+    const rst = el("button", "btn ghost wide", "חזרה לתיקיית התוכנה");
+    rst.onclick = async () => { await invoke("reset_out_dir", { names: [outName] }); renderReady(); };
+    box.append(rst);
+  }
   if (free != null && free < need) {
     note(alert, `אין מספיק מקום פנוי בתיקייה: נדרשים ${human(need)} ופנויים ${human(free)}.`, false);
     canStart = false;

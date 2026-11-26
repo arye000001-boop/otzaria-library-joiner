@@ -2,6 +2,10 @@
 members = ["core", "app"]
 resolver = "2"
 
+# גרסה אחת לכל הפרויקט: משנים כאן בלבד
+[workspace.package]
+version = "1.4.1"
+
 [profile.release]
 opt-level = "s"
 lto = true
