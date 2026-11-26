@@ -16,9 +16,11 @@ jobs:
     steps:
       # כל ה-actions מקובעים ל-commit מדויק (ההערה מציינת את התג שממנו נלקח)
       - uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262 # v4
+      # גרסת Rust מקובעת בכוונה: כך clippy לא נכשל פתאום כשיוצאת גרסה חדשה עם התראות חדשות.
+      # לעדכון: משנים כאן, מריצים מקומית cargo clippy ותיקונים אם צריך.
       - uses: dtolnay/rust-toolchain@39008827e6b4319a349e9a42dfc90579dd25f1ca # branch stable
         with:
-          toolchain: stable
+          toolchain: 1.100.0
           components: clippy, rustfmt
       - uses: Swatinem/rust-cache@d1527c8f67ef9af357290475d4af4b0fab8f12e0 # v2
 
